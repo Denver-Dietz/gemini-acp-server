@@ -1,0 +1,38 @@
+{
+  "name": "gemini-acp-server",
+  "version": "0.1.0",
+  "description": "Agent Client Protocol (ACP) server bridging editors like Zed to the Antigravity CLI",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "gemini-acp-server": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/cli.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.13.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
+    "typescript": "^5.8.2"
+  },
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "antigravity",
+    "gemini",
+    "zed",
+    "ai-agent"
+  ],
+  "author": "",
+  "license": "Apache-2.0"
+}
