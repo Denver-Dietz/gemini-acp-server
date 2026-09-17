@@ -68,6 +68,8 @@ export interface ServerOptions {
   defaultEffort?: 'low' | 'medium' | 'high';
   printTimeout?: string;
   debug?: boolean;
+  contextTrimming?: boolean;
+  mcpGating?: boolean;
 }
 
 export interface SpawnTurnOptions {
@@ -79,6 +81,8 @@ export interface SpawnTurnOptions {
   model?: string;
   effort?: 'low' | 'medium' | 'high';
   printTimeout?: string;
+  homeDir?: string;
+  env?: Record<string, string>;
   signal?: AbortSignal;
 }
 

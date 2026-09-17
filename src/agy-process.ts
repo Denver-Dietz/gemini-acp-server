@@ -132,10 +132,18 @@ export class AgyRunner {
       let conversationId = options.conversationId;
       let lastResult: AgyResultData | undefined;
 
+      const spawnEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...(options.env || {}),
+      };
+      if (options.homeDir) {
+        spawnEnv['HOME'] = options.homeDir;
+      }
+
       try {
         child = spawn(this.binaryPath, args, {
           cwd: options.cwd,
-          env: process.env,
+          env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (err) {

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import * as acp from '@agentclientprotocol/sdk';
 import { AgyRunner } from './agy-process.js';
+import { trimPromptBlocks } from './context-trimmer.js';
+import { createScopedMcpEnvironment } from './mcp-router.js';
 import type {
   AgyStreamEvent,
   ServerOptions,
@@ -183,9 +185,26 @@ export class AcpBridge {
     const abortController = new AbortController();
     session.activeAbortController = abortController;
 
-    const promptText = extractPromptText(params.prompt);
+    const promptText = this.options.contextTrimming !== false
+      ? trimPromptBlocks(params.prompt, {
+          cwd: session.cwd,
+          isOngoingSession: Boolean(session.conversationId),
+        })
+      : extractPromptText(params.prompt);
+
     if (!promptText.trim()) {
       return { stopReason: 'end_turn' };
+    }
+
+    const scopedMcp = createScopedMcpEnvironment({
+      prompt: promptText,
+      enabled: this.options.mcpGating !== false,
+    });
+
+    if (this.options.debug && scopedMcp.disabledServers.length > 0) {
+      process.stderr.write(
+        `[gemini-acp] MCP Gating: suppressed heavy servers [${scopedMcp.disabledServers.join(', ')}] for turn\n`,
+      );
     }
 
     const onEvent = async (event: AgyStreamEvent) => {
@@ -202,6 +221,7 @@ export class AcpBridge {
         model: this.options.defaultModel,
         effort: this.options.defaultEffort ?? 'medium',
         printTimeout: this.options.printTimeout,
+        homeDir: scopedMcp.homeDir,
         signal: abortController.signal,
       },
       onEvent,
@@ -224,6 +244,7 @@ export class AcpBridge {
       }
       throw err;
     } finally {
+      scopedMcp.cleanup();
       if (session.activeAbortController === abortController) {
         session.activeAbortController = null;
       }

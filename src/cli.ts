@@ -8,6 +8,8 @@ function parseArgs(args: string[]): ServerOptions {
     defaultModel: process.env['AGY_MODEL'],
     defaultEffort: (process.env['AGY_EFFORT'] as any) || 'medium',
     debug: process.env['AGY_DEBUG'] === '1' || process.env['DEBUG'] === '1',
+    contextTrimming: process.env['AGY_CONTEXT_TRIMMING'] !== '0',
+    mcpGating: process.env['AGY_MCP_GATING'] !== '0',
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -23,6 +25,10 @@ function parseArgs(args: string[]): ServerOptions {
       }
     } else if (arg === '--debug') {
       options.debug = true;
+    } else if (arg === '--no-context-trimming') {
+      options.contextTrimming = false;
+    } else if (arg === '--no-mcp-gating') {
+      options.mcpGating = false;
     } else if (arg === '--help' || arg === '-h') {
       process.stderr.write(`
 Antigravity ACP Server (gemini-acp-server)
@@ -31,11 +37,13 @@ Usage:
   gemini-acp-server [options]
 
 Options:
-  --binary <path>    Path to agy CLI executable (default: 'agy' or AGY_PATH)
-  --model <name>     Default model to forward to agy (default: AGY_MODEL)
-  --effort <level>   Reasoning effort: low, medium, high (default: AGY_EFFORT)
-  --debug            Enable debug logs to stderr
-  --help, -h         Show this help message
+  --binary <path>          Path to agy CLI executable (default: 'agy' or AGY_PATH)
+  --model <name>           Default model to forward to agy (default: AGY_MODEL)
+  --effort <level>         Reasoning effort: low, medium, high (default: medium or AGY_EFFORT)
+  --no-context-trimming    Disable smart whitespace/transcript/file-dump trimming
+  --no-mcp-gating          Disable dynamic MCP tool namespace suppression
+  --debug                  Enable debug logs to stderr
+  --help, -h               Show this help message
 
 Standard I/O:
   Runs an ACP-compliant JSON-RPC server reading requests from stdin and
