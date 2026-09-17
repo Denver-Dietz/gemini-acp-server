@@ -200,7 +200,7 @@ export class AcpBridge {
         mode: session.mode,
         additionalDirectories: session.additionalDirectories,
         model: this.options.defaultModel,
-        effort: this.options.defaultEffort,
+        effort: this.options.defaultEffort ?? 'medium',
         printTimeout: this.options.printTimeout,
         signal: abortController.signal,
       },

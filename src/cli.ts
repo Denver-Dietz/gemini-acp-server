@@ -6,7 +6,7 @@ function parseArgs(args: string[]): ServerOptions {
   const options: ServerOptions = {
     binaryPath: process.env['AGY_PATH'] || 'agy',
     defaultModel: process.env['AGY_MODEL'],
-    defaultEffort: (process.env['AGY_EFFORT'] as any) || undefined,
+    defaultEffort: (process.env['AGY_EFFORT'] as any) || 'medium',
     debug: process.env['AGY_DEBUG'] === '1' || process.env['DEBUG'] === '1',
   };
 
