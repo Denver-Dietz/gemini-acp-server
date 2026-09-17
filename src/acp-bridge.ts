@@ -201,6 +201,7 @@ export class AcpBridge {
         additionalDirectories: session.additionalDirectories,
         model: this.options.defaultModel,
         effort: this.options.defaultEffort,
+        printTimeout: this.options.printTimeout,
         signal: abortController.signal,
       },
       onEvent,
@@ -297,6 +298,22 @@ export class AcpBridge {
               outputTokens: update.usage.output_tokens,
               cacheReadTokens: update.usage.cache_read_tokens,
               totalTokens: update.usage.total_tokens,
+            },
+          },
+        });
+      }
+    } else if (event.event === 'result') {
+      const res = event.result;
+      if (res.usage) {
+        await cx.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: 'usage_update',
+            usage: {
+              inputTokens: res.usage.input_tokens,
+              outputTokens: res.usage.output_tokens,
+              cacheReadTokens: res.usage.cache_read_tokens,
+              totalTokens: res.usage.total_tokens,
             },
           },
         });

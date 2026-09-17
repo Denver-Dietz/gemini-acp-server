@@ -66,6 +66,7 @@ export interface ServerOptions {
   binaryPath?: string;
   defaultModel?: string;
   defaultEffort?: 'low' | 'medium' | 'high';
+  printTimeout?: string;
   debug?: boolean;
 }
 
@@ -77,6 +78,7 @@ export interface SpawnTurnOptions {
   additionalDirectories?: string[];
   model?: string;
   effort?: 'low' | 'medium' | 'high';
+  printTimeout?: string;
   signal?: AbortSignal;
 }
 

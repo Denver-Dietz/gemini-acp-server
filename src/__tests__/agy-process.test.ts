@@ -88,6 +88,8 @@ describe('AgyProcess', () => {
         '--output-format',
         'stream-json',
         '--dangerously-skip-permissions',
+        '--print-timeout',
+        '30m',
       ]);
     });
 

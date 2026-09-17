@@ -40,6 +40,8 @@ export function buildAgyArgs(options: SpawnTurnOptions): string[] {
     '--output-format',
     'stream-json',
     '--dangerously-skip-permissions',
+    '--print-timeout',
+    options.printTimeout || '30m',
   ];
 
   if (options.conversationId) {
