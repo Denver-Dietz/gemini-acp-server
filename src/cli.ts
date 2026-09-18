@@ -10,6 +10,8 @@ function parseArgs(args: string[]): ServerOptions {
     debug: process.env['AGY_DEBUG'] === '1' || process.env['DEBUG'] === '1',
     contextTrimming: process.env['AGY_CONTEXT_TRIMMING'] !== '0',
     mcpGating: process.env['AGY_MCP_GATING'] !== '0',
+    conversational: process.env['AGY_CONVERSATIONAL'] !== '0',
+    systemInstruction: process.env['AGY_SYSTEM_INSTRUCTION'],
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -23,6 +25,14 @@ function parseArgs(args: string[]): ServerOptions {
       if (val === 'low' || val === 'medium' || val === 'high') {
         options.defaultEffort = val;
       }
+    } else if (arg === '--instruction' || arg === '--system-instruction') {
+      if (i + 1 < args.length) {
+        options.systemInstruction = args[++i];
+      }
+    } else if (arg === '--conversational') {
+      options.conversational = true;
+    } else if (arg === '--no-conversational') {
+      options.conversational = false;
     } else if (arg === '--debug') {
       options.debug = true;
     } else if (arg === '--no-context-trimming') {
@@ -40,6 +50,9 @@ Options:
   --binary <path>          Path to agy CLI executable (default: 'agy' or AGY_PATH)
   --model <name>           Default model to forward to agy (default: AGY_MODEL)
   --effort <level>         Reasoning effort: low, medium, high (default: medium or AGY_EFFORT)
+  --instruction <text>     Custom system instruction or communication directive
+  --conversational         Enable conversational collaboration mode (default: true)
+  --no-conversational      Disable conversational prompt shaping
   --no-context-trimming    Disable smart whitespace/transcript/file-dump trimming
   --no-mcp-gating          Disable dynamic MCP tool namespace suppression
   --debug                  Enable debug logs to stderr

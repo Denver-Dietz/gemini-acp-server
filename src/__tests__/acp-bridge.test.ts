@@ -4,6 +4,8 @@ import {
   extractPromptText,
   inferToolKind,
   extractLocations,
+  formatConversationalPrompt,
+  DEFAULT_CONVERSATIONAL_INSTRUCTION,
   type ClientConnection,
 } from '../acp-bridge.js';
 import type { AgyRunner } from '../agy-process.js';
@@ -215,8 +217,13 @@ describe('AcpBridge', () => {
       expect(notifications.length).toBeGreaterThanOrEqual(3);
       const types = notifications.map((n) => n.params.update.sessionUpdate);
       expect(types).toContain('agent_message_chunk');
-      expect(types).toContain('tool_call');
       expect(types).toContain('tool_call_update');
+
+      const toolUpdates = notifications
+        .map((n) => n.params.update)
+        .filter((u) => u.sessionUpdate === 'tool_call_update');
+      expect(toolUpdates.some((u) => u.status === 'in_progress')).toBe(true);
+      expect(toolUpdates.some((u) => u.status === 'completed')).toBe(true);
     });
 
     it('cancels active turn when cancel request is received', async () => {
@@ -257,5 +264,101 @@ describe('AcpBridge', () => {
       expect(result.stopReason).toBe('cancelled');
       expect(aborted).toBe(true);
     });
+
+    it('injects conversational directive on initial session turn', async () => {
+      let capturedPrompt = '';
+      const mockRunner: Partial<AgyRunner> = {
+        runTurn: jest.fn((options: SpawnTurnOptions) => {
+          capturedPrompt = options.prompt;
+          return {
+            promise: Promise.resolve({
+              conversationId: 'conv-123',
+              exitCode: 0,
+            }),
+            abort: () => {},
+          };
+        }) as any,
+      };
+
+      const bridge = new AcpBridge(mockRunner as AgyRunner, {
+        conversational: true,
+      });
+      const sessionRes = await bridge.newSession({ cwd: '/test' });
+      const mockClient: ClientConnection = {
+        notify: async () => {},
+        request: async () => ({}),
+      };
+
+      await bridge.prompt(
+        {
+          sessionId: sessionRes.sessionId,
+          prompt: [{ type: 'text', text: 'Can you explain this function?' }],
+        },
+        mockClient,
+      );
+
+      expect(capturedPrompt).toContain('[System Directive: Communication Style & Engagement]');
+      expect(capturedPrompt).toContain('Can you explain this function?');
+    });
+
+    it('does not inject conversational directive when conversational is false', async () => {
+      let capturedPrompt = '';
+      const mockRunner: Partial<AgyRunner> = {
+        runTurn: jest.fn((options: SpawnTurnOptions) => {
+          capturedPrompt = options.prompt;
+          return {
+            promise: Promise.resolve({
+              conversationId: 'conv-123',
+              exitCode: 0,
+            }),
+            abort: () => {},
+          };
+        }) as any,
+      };
+
+      const bridge = new AcpBridge(mockRunner as AgyRunner, {
+        conversational: false,
+      });
+      const sessionRes = await bridge.newSession({ cwd: '/test' });
+      const mockClient: ClientConnection = {
+        notify: async () => {},
+        request: async () => ({}),
+      };
+
+      await bridge.prompt(
+        {
+          sessionId: sessionRes.sessionId,
+          prompt: [{ type: 'text', text: 'Just do this task' }],
+        },
+        mockClient,
+      );
+
+      expect(capturedPrompt).not.toContain('[System Directive: Communication Style & Engagement]');
+      expect(capturedPrompt).toBe('Just do this task');
+    });
+  });
+
+  describe('formatConversationalPrompt', () => {
+    it('wraps standard messages with default conversational directive', () => {
+      const formatted = formatConversationalPrompt('Hello, can we discuss the current work?');
+      expect(formatted).toContain('[System Directive: Communication Style & Engagement]');
+      expect(formatted).toContain(DEFAULT_CONVERSATIONAL_INSTRUCTION);
+      expect(formatted).toContain('[User Message]\nHello, can we discuss the current work?');
+    });
+
+    it('wraps with custom instruction when provided', () => {
+      const formatted = formatConversationalPrompt('Tell me about X', 'Be brief and direct.');
+      expect(formatted).toContain('Be brief and direct.');
+      expect(formatted).toContain('[User Message]\nTell me about X');
+    });
+
+    it('leaves strict JSON plan requests unmodified', () => {
+      const jsonPrompt = 'Return strictly the requested JSON action plan:\n{"action": "test"}';
+      expect(formatConversationalPrompt(jsonPrompt)).toBe(jsonPrompt);
+
+      const rawJson = '{"command": ["ls", "-la"]}';
+      expect(formatConversationalPrompt(rawJson)).toBe(rawJson);
+    });
   });
 });
+

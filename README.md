@@ -103,6 +103,9 @@ node dist/cli.js [options]
 | `--binary <path>` | `AGY_PATH` | `agy` | Path to the `agy` CLI binary |
 | `--model <name>` | `AGY_MODEL` | `undefined` | Target model override for turns |
 | `--effort <level>`| `AGY_EFFORT` | `undefined` | Reasoning effort (`low`, `medium`, `high`) |
+| `--instruction <text>` | `AGY_SYSTEM_INSTRUCTION` | `undefined` | Custom system instruction / directive |
+| `--conversational` | `AGY_CONVERSATIONAL` | `true` | Enables conversational collaboration mode |
+| `--no-conversational` | `AGY_CONVERSATIONAL=0` | `false` | Disables conversational prompt shaping |
 | `--debug` | `AGY_DEBUG` | `false` | Writes debug diagnostic traces to `stderr` |
 
 *Note: All diagnostic and error logging is sent exclusively to `stderr` to ensure stdout remains completely clean for JSON-RPC message framing.*

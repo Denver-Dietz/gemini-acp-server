@@ -70,6 +70,8 @@ export interface ServerOptions {
   debug?: boolean;
   contextTrimming?: boolean;
   mcpGating?: boolean;
+  conversational?: boolean;
+  systemInstruction?: string;
 }
 
 export interface SpawnTurnOptions {
@@ -84,6 +86,8 @@ export interface SpawnTurnOptions {
   homeDir?: string;
   env?: Record<string, string>;
   signal?: AbortSignal;
+  conversational?: boolean;
+  systemInstruction?: string;
 }
 
 export interface SessionState {

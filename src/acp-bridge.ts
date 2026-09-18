@@ -43,6 +43,30 @@ export function extractPromptText(blocks: unknown[]): string {
     .join('\n');
 }
 
+export const DEFAULT_CONVERSATIONAL_INSTRUCTION =
+  'You are Antigravity, an intelligent, conversational coding assistant and engineering collaborator. ' +
+  'Communicate openly and conversationally with the user. Discuss the current work being done, ' +
+  'explain your reasoning and architectural choices, suggest improvements, and answer questions thoroughly. ' +
+  'When writing code or running commands, maintain full precision and verify your work.';
+
+export function formatConversationalPrompt(
+  promptText: string,
+  instruction: string = DEFAULT_CONVERSATIONAL_INSTRUCTION,
+): string {
+  const trimmed = promptText.trim();
+  // If the prompt is a machine-oriented JSON plan request or already contains system directive, don't wrap
+  if (
+    trimmed.includes('Return strictly the requested JSON') ||
+    trimmed.includes('[System Directive') ||
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('```json')
+  ) {
+    return promptText;
+  }
+
+  return `[System Directive: Communication Style & Engagement]\n${instruction}\n\n[User Message]\n${promptText}`;
+}
+
 export function inferToolKind(toolName?: string): 'read' | 'edit' | 'execute' | 'other' {
   if (!toolName) return 'other';
   const lower = toolName.toLowerCase();
@@ -196,8 +220,16 @@ export class AcpBridge {
       return { stopReason: 'end_turn' };
     }
 
+    let finalPrompt = promptText;
+    if (this.options.conversational !== false) {
+      const instruction = this.options.systemInstruction || DEFAULT_CONVERSATIONAL_INSTRUCTION;
+      if (!session.conversationId || Boolean(this.options.systemInstruction)) {
+        finalPrompt = formatConversationalPrompt(promptText, instruction);
+      }
+    }
+
     const scopedMcp = createScopedMcpEnvironment({
-      prompt: promptText,
+      prompt: finalPrompt,
       enabled: this.options.mcpGating !== false,
     });
 
@@ -213,7 +245,7 @@ export class AcpBridge {
 
     const { promise } = this.runner.runTurn(
       {
-        prompt: promptText,
+        prompt: finalPrompt,
         cwd: session.cwd,
         conversationId: session.conversationId,
         mode: session.mode,
@@ -287,7 +319,7 @@ export class AcpBridge {
           await cx.notify(acp.methods.client.session.update, {
             sessionId,
             update: {
-              sessionUpdate: 'tool_call',
+              sessionUpdate: 'tool_call_update',
               toolCallId,
               title: update.tool_name ?? 'tool',
               kind,
@@ -297,13 +329,19 @@ export class AcpBridge {
             },
           });
         } else if (update.state === 'DONE') {
+          const rawOutput = update.tool_info?.output;
+          const isError =
+            typeof rawOutput === 'string' &&
+            rawOutput.includes('The command exited with code') &&
+            !rawOutput.includes('The command exited with code 0');
+
           await cx.notify(acp.methods.client.session.update, {
             sessionId,
             update: {
               sessionUpdate: 'tool_call_update',
               toolCallId,
-              status: 'completed',
-              rawOutput: update.tool_info?.output,
+              status: isError ? 'failed' : 'completed',
+              rawOutput,
             },
           });
         }
