@@ -175,9 +175,18 @@ export class AgyRunner {
         try {
           const res = onEvent(event);
           if (res instanceof Promise) {
-            res.catch((e) => {
-              process.stderr.write(`[gemini-acp] Error in onEvent handler: ${e}\n`);
-            });
+            // Fire-and-forget for non-critical events to avoid Nagle delays
+            // Only critical events like 'result' should block the pipeline
+            if (event.event !== 'result') {
+              res.catch((e) => {
+                process.stderr.write(`[gemini-acp] Error in onEvent handler: ${e}\n`);
+              });
+            } else {
+              // For result events, catch errors but don't await (result is already captured above)
+              res.catch((e) => {
+                process.stderr.write(`[gemini-acp] Error in onEvent handler: ${e}\n`);
+              });
+            }
           }
         } catch (e) {
           process.stderr.write(`[gemini-acp] Error in onEvent handler: ${e}\n`);

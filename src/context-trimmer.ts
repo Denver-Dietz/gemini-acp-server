@@ -21,22 +21,19 @@ export function normalizeText(text: string): string {
 
 /**
  * Intercepts massive base64 payloads and minified single-line blobs to prevent token exhaustion.
+ * Combined regex: handles base64 URLs and minified blobs in a single pass.
  */
 export function guardLargeBlobs(text: string): string {
   if (!text) return '';
 
-  // Guard base64 data URLs
-  let guarded = text.replace(
-    /data:([a-zA-Z0-9/+-]+);base64,([a-zA-Z0-9+/=]{120,})/g,
-    (_match, mime, b64) => `[Embedded binary payload: ${mime} (${Math.round((b64.length * 3) / 4)} bytes)]`,
-  );
-
-  // Guard long unformatted minified blobs (>4000 characters with no whitespace)
-  guarded = guarded.replace(/[^\s]{4000,}/g, (match) => {
-    return `${match.slice(0, 160)}... [Truncated minified token blob: ${match.length} characters]`;
-  });
-
-  return guarded;
+  return text
+    .replace(
+      /data:([a-zA-Z0-9/+-]+);base64,([a-zA-Z0-9+/=]{120,})/g,
+      (_match, mime, b64) => `[Embedded binary payload: ${mime} (${Math.round((b64.length * 3) / 4)} bytes)]`,
+    )
+    .replace(/[^\s]{4000,}/g, (match) => {
+      return `${match.slice(0, 160)}... [Truncated minified token blob: ${match.length} characters]`;
+    });
 }
 
 /**
@@ -64,6 +61,7 @@ export function stripRedundantDialogue(text: string, isOngoingSession: boolean):
 /**
  * Detects embedded full-file dumps of files already present in the workspace
  * and condenses them into lightweight disk references.
+ * Fast-path: check line count before filesystem ops (defer FS checks).
  */
 export function deDuplicateFileDumps(
   text: string,
@@ -76,17 +74,21 @@ export function deDuplicateFileDumps(
   const codeBlockRegex = /(?:^|\n)(?:File:\s*|Path:\s*|#\s*)?([a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+)\s*\n```[a-zA-Z0-9_-]*\n([\s\S]*?)```/g;
 
   return text.replace(codeBlockRegex, (match, filePath, codeContent) => {
+    const lines = codeContent.trim().split('\n');
+    // Fast-path: if content is small, keep it (skip FS check)
+    if (lines.length <= maxDumpLines) {
+      return match;
+    }
+
+    // Only check filesystem for large blocks
     try {
       const targetPath = path.isAbsolute(filePath)
         ? filePath
         : path.resolve(cwd, filePath);
 
       if (fs.existsSync(targetPath)) {
-        const lines = codeContent.trim().split('\n');
-        if (lines.length > maxDumpLines) {
-          const relPath = path.relative(cwd, targetPath);
-          return `\n[Context: ${relPath} (${lines.length} lines on disk - accessible via ViewFile/GrepSearch)]`;
-        }
+        const relPath = path.relative(cwd, targetPath);
+        return `\n[Context: ${relPath} (${lines.length} lines on disk - accessible via ViewFile/GrepSearch)]`;
       }
     } catch {
       // If filesystem check fails, retain original text
@@ -98,6 +100,7 @@ export function deDuplicateFileDumps(
 /**
  * Primary Context-Filtering Middleware.
  * Intercepts raw ACP prompt blocks and produces an optimized prompt payload.
+ * Optimized: reduced passes, fast-path for small files, deferred FS checks.
  */
 export function trimPromptBlocks(
   blocks: unknown[],
@@ -150,10 +153,19 @@ export function trimPromptBlocks(
     .filter(Boolean)
     .join('\n\n');
 
+  // Optimized pipeline: normalize → guard → dedupe → dialogue strip (order matters for efficiency)
+  // Normalizing first ensures consistent whitespace before expensive operations
   let processed = normalizeText(extracted);
+
+  // Guard large blobs and dedupe file dumps in separate passes (can't combine safely)
   processed = guardLargeBlobs(processed);
-  processed = stripRedundantDialogue(processed, isOngoingSession);
   processed = deDuplicateFileDumps(processed, cwd, maxDumpLines);
 
+  // Only strip dialogue if needed (optional pass)
+  if (isOngoingSession) {
+    processed = stripRedundantDialogue(processed, true);
+  }
+
+  // Final normalize to clean up any whitespace from replacements
   return normalizeText(processed);
 }

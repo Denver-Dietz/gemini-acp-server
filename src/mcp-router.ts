@@ -87,6 +87,10 @@ const HEAVY_SERVERS = new Set([
   'data-agent-kit',
 ]);
 
+// Cache for scoped MCP environments by domain set hash
+const scopedMcpCache = new Map<string, { result: ScopedMcpResult; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minute cache
+
 /**
  * Detects which functional domains are relevant to a given prompt.
  */
@@ -138,6 +142,7 @@ export interface CreateScopedMcpOptions {
 /**
  * Creates an ephemeral scoped home environment disabling heavy, unused MCP servers
  * for pure coding tasks, eliminating redundant system prompt schemas.
+ * Uses caching to avoid filesystem ops when domain requirements match prior turns.
  */
 export function createScopedMcpEnvironment(
   options: CreateScopedMcpOptions,
@@ -152,6 +157,15 @@ export function createScopedMcpEnvironment(
 
   if (options.enabled === false) {
     return noopResult;
+  }
+
+  const requiredDomains = detectRequiredDomains(options.prompt);
+  const domainCacheKey = Array.from(requiredDomains).sort().join(',');
+
+  // Check cache before filesystem ops
+  const cached = scopedMcpCache.get(domainCacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.result;
   }
 
   const realMcpConfigFile =
@@ -174,16 +188,17 @@ export function createScopedMcpEnvironment(
     return noopResult;
   }
 
-  const requiredDomains = detectRequiredDomains(options.prompt);
   const disabledServers = computeDisabledServers(serverNames, requiredDomains);
 
   if (disabledServers.length === 0) {
-    return {
+    const result: ScopedMcpResult = {
       homeDir: baseHome,
       disabledServers: [],
       activeDomains: Array.from(requiredDomains),
       cleanup: () => {},
     };
+    scopedMcpCache.set(domainCacheKey, { result, timestamp: Date.now() });
+    return result;
   }
 
   // Create isolated temp directory
@@ -222,7 +237,7 @@ export function createScopedMcpEnvironment(
       }
     }
 
-    return {
+    const result: ScopedMcpResult = {
       homeDir: tmpHome,
       disabledServers,
       activeDomains: Array.from(requiredDomains),
@@ -234,6 +249,8 @@ export function createScopedMcpEnvironment(
         }
       },
     };
+    scopedMcpCache.set(domainCacheKey, { result, timestamp: Date.now() });
+    return result;
   } catch (err) {
     // If sandboxing encounters an issue, fallback to normal home
     return noopResult;
