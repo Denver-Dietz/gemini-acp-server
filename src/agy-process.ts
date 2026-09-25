@@ -18,15 +18,22 @@ export class AgyProcessError extends Error {
 }
 
 export function parseAgyEvent(line: string): AgyStreamEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
+  if (line.length === 0) return null;
+  // Fast path: NDJSON lines arrive without leading whitespace — avoid the trim() allocation.
+  if (line.charCodeAt(0) === 0x7b /* { */) {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed && typeof parsed.event === 'string') return parsed as unknown as AgyStreamEvent;
+    } catch {
+      // Non-JSON output or partial log line
+    }
     return null;
   }
+  const trimmed = line.trim();
+  if (!trimmed) return null;
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    if (parsed && typeof parsed.event === 'string') {
-      return parsed as unknown as AgyStreamEvent;
-    }
+    if (parsed && typeof parsed.event === 'string') return parsed as unknown as AgyStreamEvent;
   } catch {
     // Non-JSON output or partial log line
   }
@@ -73,6 +80,11 @@ export interface RunTurnResult {
   conversationId?: string;
   result?: AgyResultData;
   exitCode: number | null;
+  /** True when the turn was aborted because no output arrived within `stallMs`. */
+  stalled: boolean;
+  /** True when the turn was aborted after `maxErrorSteps` error steps without any output. */
+  errorAborted: boolean;
+  stderr: string;
 }
 
 export class AgyRunner {
@@ -100,6 +112,17 @@ export class AgyRunner {
     const args = buildAgyArgs(options);
     let child: ChildProcess | null = null;
     let aborted = false;
+    let stalled = false;
+    let errorAborted = false;
+    let errorSteps = 0;
+    let sawOutput = false;
+    let stallTimer: NodeJS.Timeout | undefined;
+    const clearStall = (): void => {
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
+    };
 
     const abort = (): void => {
       aborted = true;
@@ -150,6 +173,14 @@ export class AgyRunner {
         return reject(err);
       }
 
+      if (options.stallMs && options.stallMs > 0) {
+        stallTimer = setTimeout(() => {
+          stalled = true;
+          abort();
+        }, options.stallMs);
+        stallTimer.unref();
+      }
+
       if (!child.stdout || !child.stderr) {
         return reject(new Error('Failed to attach stdout/stderr to agy process'));
       }
@@ -162,6 +193,23 @@ export class AgyRunner {
       rl.on('line', (line) => {
         const event = parseAgyEvent(line);
         if (!event) return;
+
+        // the model is alive once it produces output or a final result (init/user_input arrive regardless)
+        if (
+          event.event === 'result' ||
+          (event.event === 'step_update' && event.step_update.step_type !== 'user_input')
+        ) {
+          clearStall();
+        }
+
+        if (event.event === 'step_update') {
+          const type = event.step_update.step_type as string;
+          if (type === 'agent_response' || type === 'tool') sawOutput = true;
+          if (type === 'error_message' && !sawOutput && options.maxErrorSteps && ++errorSteps >= options.maxErrorSteps) {
+            errorAborted = true;
+            abort();
+          }
+        }
 
         if (event.event === 'init' && event.conversation_id) {
           conversationId = event.conversation_id;
@@ -198,10 +246,12 @@ export class AgyRunner {
       });
 
       child.on('error', (err) => {
+        clearStall();
         reject(err);
       });
 
       child.on('close', (code) => {
+        clearStall();
         if (options.signal) {
           options.signal.removeEventListener('abort', abort);
         }
@@ -211,6 +261,9 @@ export class AgyRunner {
             conversationId,
             result: lastResult,
             exitCode: code,
+            stalled,
+            errorAborted,
+            stderr: stderrAccumulator,
           });
         }
 
@@ -228,6 +281,9 @@ export class AgyRunner {
           conversationId,
           result: lastResult,
           exitCode: code,
+          stalled: false,
+          errorAborted: false,
+          stderr: stderrAccumulator,
         });
       });
     });
