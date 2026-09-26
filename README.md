@@ -80,7 +80,7 @@ Add the server to your Zed `settings.json` under `agent_servers`:
       "command": "node",
       "args": ["/home/prime/Coding-Agents/Gemini-ACP-Server/dist/cli.js"],
       "env": {
-        "AGY_PATH": "/home/prime/Coding-Agents/bin/agy",
+        "AGY_PATH": "/home/prime/Coding-Agents/Antigravity/antigravity-cli/agy",
         "AGY_EFFORT": "high"
       }
     }
