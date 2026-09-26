@@ -37,7 +37,7 @@ export class AutoCompAdapter {
 
   constructor(options: AutoCompAdapterOptions = {}) {
     this.scriptPath = options.scriptPath ?? process.env['GEMINI_ACP_AUTOCOMP_ADAPTER'] ??
-      '/home/prime/Platform/AutoComp-HarnessAdapters/autocomp-adapter.py';
+      '/home/prime/.local/share/Memory-System/AutoComp-HarnessAdapters/autocomp-adapter.py';
     this.pythonPath = options.pythonPath ?? process.env['PYTHON'] ?? 'python3';
     // Lifecycle writes are fail-open during turns, but must have enough time
     // to reach AutoComp and MemoryBridge when the server is shutting down.

@@ -112,7 +112,7 @@ node dist/cli.js [options]
 
 ### Platform continuity adapter
 
-When the shared boundary exists, the server uses `/home/prime/Platform/AutoComp-HarnessAdapters/autocomp-adapter.py` automatically. It emits bounded lifecycle events (`session_start` and one checkpoint per successful turn); the ACP prompt and stream never wait for Python, MemoryBridge, or GraphRAG. Adapter failures are fail-open.
+When the shared boundary exists, the server uses `/home/prime/.local/share/Memory-System/AutoComp-HarnessAdapters/autocomp-adapter.py` automatically. It emits bounded lifecycle events (`session_start` and one checkpoint per successful turn); the ACP prompt and stream never wait for Python, MemoryBridge, or GraphRAG. Adapter failures are fail-open.
 
 | Environment variable | Default | Description |
 | :--- | :--- | :--- |
