@@ -2,6 +2,11 @@
  * Core type definitions for Antigravity ACP Server.
  */
 
+import type { ModelRouter } from './router/router.js';
+import type { McpMode } from './mcp-router.js';
+import type { Tier } from './router/config.js';
+import type { MemoryAdapter } from './memory-adapter.js';
+
 export interface AgyUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -70,8 +75,14 @@ export interface ServerOptions {
   debug?: boolean;
   contextTrimming?: boolean;
   mcpGating?: boolean;
+  /** Default MCP mode (`_meta.agyRouter.mcp` overrides per session/turn). */
+  mcpMode?: McpMode;
   conversational?: boolean;
   systemInstruction?: string;
+  /** When set, models are chosen per turn by complexity and health instead of one fixed model. */
+  router?: ModelRouter | null;
+  /** Shared AutoComp/MemoryBridge lifecycle adapter; fail-open and non-blocking. */
+  memoryAdapter?: MemoryAdapter;
 }
 
 export interface SpawnTurnOptions {
@@ -86,6 +97,10 @@ export interface SpawnTurnOptions {
   homeDir?: string;
   env?: Record<string, string>;
   signal?: AbortSignal;
+  /** Abort the turn if no agent output or result arrives within this many ms. */
+  stallMs?: number;
+  /** Abort after this many error_message steps with no output (used when retesting a failed model). */
+  maxErrorSteps?: number;
   conversational?: boolean;
   systemInstruction?: string;
 }
@@ -98,4 +113,10 @@ export interface SessionState {
   conversationId?: string;
   mode: 'accept-edits' | 'plan';
   activeAbortController: AbortController | null;
+  /** Highest complexity tier this conversation has needed; it never routes below it. */
+  routerTier?: Tier;
+  /** Caller-provided `_meta` from session/new (e.g. a default tier hint). */
+  meta?: unknown;
+  /** Model that served the previous turn, used to announce routing changes. */
+  lastModel?: string;
 }

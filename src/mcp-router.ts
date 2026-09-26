@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ export type McpDomain =
   | 'notebooks'
   | 'web_search'
   | 'vcs'
+  | 'monitoring'
   | 'general';
 
 export interface ScopedMcpResult {
@@ -61,7 +63,14 @@ const DOMAIN_KEYWORDS: Record<McpDomain, RegExp[]> = {
     /\bpull\s*requests?\b/i,
     /\bbranch(?:es)?\b/i,
   ],
-  general: [],
+  monitoring: [/\bsentry\b/i, /\berror tracking\b/i, /\bincidents?\b/i],
+  general: [
+    /\boverlord\b/i,
+    /\bmagic\b/i,
+    /\bhyperlambda\b/i,
+    /\bcapabilities?\b/i,
+    /\bcontext\b/i,
+  ],
 };
 
 const SERVER_DOMAIN_MAP: Record<string, McpDomain> = {
@@ -71,10 +80,15 @@ const SERVER_DOMAIN_MAP: Record<string, McpDomain> = {
   supabase: 'database',
   notebooks: 'notebooks',
   'data-agent-kit': 'notebooks',
+  visualization: 'notebooks',
+  sentry: 'monitoring',
   exa: 'web_search',
   firecrawl: 'web_search',
   git: 'vcs',
   github: 'vcs',
+  'magic-hyperlambda': 'general',
+  'overlord-context': 'general',
+  'overlord-capabilities': 'general',
 };
 
 // Heavy server namespaces that add significant schema tokens
@@ -85,11 +99,12 @@ const HEAVY_SERVERS = new Set([
   'supabase',
   'notebooks',
   'data-agent-kit',
+  'visualization',
+  'sentry',
+  'magic-hyperlambda',
+  'overlord-context',
+  'overlord-capabilities',
 ]);
-
-// Cache for scoped MCP environments by domain set hash
-const scopedMcpCache = new Map<string, { result: ScopedMcpResult; timestamp: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minute cache
 
 /**
  * Detects which functional domains are relevant to a given prompt.
@@ -132,127 +147,189 @@ export function computeDisabledServers(
   return toDisable;
 }
 
+/** `auto` gates heavy servers by prompt keywords, `none` starts no MCP servers, `all` leaves the real config. */
+export type McpMode = 'auto' | 'none' | 'all';
+
+/** Reads the MCP mode from ACP `_meta` (`_meta.agyRouter.mcp` or `_meta.mcp`). */
+export function parseMcpMode(meta: unknown, fallback: McpMode = 'auto'): McpMode {
+  if (!meta || typeof meta !== 'object') return fallback;
+  const m = meta as Record<string, unknown>;
+  const router = m['agyRouter'];
+  const raw = router && typeof router === 'object' ? (router as Record<string, unknown>)['mcp'] : m['mcp'];
+  if (raw === undefined || raw === null) return fallback;
+  const v = String(raw).toLowerCase();
+  if (v === 'none' || v === 'off' || v === 'false') return 'none';
+  if (v === 'all' || v === 'on' || v === 'true') return 'all';
+  if (v === 'auto') return 'auto';
+  return fallback;
+}
+
 export interface CreateScopedMcpOptions {
   prompt: string;
   enabled?: boolean;
+  mode?: McpMode;
   baseHome?: string;
   configPath?: string;
+  /** Where reusable scoped homes live. Defaults to ~/.gemini-acp-server/scoped-homes. */
+  stateDir?: string;
+}
+
+// Real-home entries that tools rely on. Symlinked (never copied) so caches and credentials are shared.
+// .npm matters most: npx installs MCP packages there, and a private per-turn copy re-downloads
+// hundreds of MB every turn.
+const SHARED_HOME_ENTRIES = ['.npm', '.cache', '.config', '.local', '.ssh', '.gitconfig', '.git-credentials'];
+const STALE_HOME_MS = 30 * 24 * 3_600_000;
+
+interface CachedMcpConfig {
+  signature: string;
+  raw: string;
+  config: { mcpServers?: Record<string, Record<string, unknown>> };
+}
+
+const configCache = new Map<string, CachedMcpConfig>();
+const scopedHomeSourceCache = new Map<string, string>();
+
+function linkIfMissing(target: string, linkPath: string): void {
+  try {
+    fs.lstatSync(linkPath);
+  } catch {
+    try {
+      fs.symlinkSync(target, linkPath);
+    } catch {
+      // raced with another process creating the same link
+    }
+  }
+}
+
+/** Creates (or refreshes) `.gemini` inside a scoped home: real dir of symlinks, with a generated mcp config. */
+function populateScopedHome(home: string, baseHome: string, modifiedConfig: unknown): void {
+  const scopedGemini = path.join(home, '.gemini');
+  fs.mkdirSync(scopedGemini, { recursive: true });
+  const realGemini = path.join(baseHome, '.gemini');
+  if (fs.existsSync(realGemini)) {
+    for (const item of fs.readdirSync(realGemini)) {
+      if (item === 'config') continue;
+      linkIfMissing(path.join(realGemini, item), path.join(scopedGemini, item));
+    }
+  }
+  const scopedConfig = path.join(scopedGemini, 'config');
+  fs.mkdirSync(scopedConfig, { recursive: true });
+  const realConfig = path.join(realGemini, 'config');
+  if (fs.existsSync(realConfig)) {
+    for (const item of fs.readdirSync(realConfig)) {
+      if (item !== 'mcp_config.json') linkIfMissing(path.join(realConfig, item), path.join(scopedConfig, item));
+    }
+  }
+  fs.writeFileSync(path.join(scopedConfig, 'mcp_config.json'), JSON.stringify(modifiedConfig, null, 2));
+
+  for (const entry of SHARED_HOME_ENTRIES) {
+    const real = path.join(baseHome, entry);
+    if (fs.existsSync(real)) linkIfMissing(real, path.join(home, entry));
+  }
+  // make sure npx always has a shared cache to write into, even on a fresh machine
+  const npm = path.join(baseHome, '.npm');
+  if (!fs.existsSync(npm)) {
+    fs.mkdirSync(npm, { recursive: true });
+    linkIfMissing(npm, path.join(home, '.npm'));
+  }
+}
+
+function pruneStaleHomes(stateDir: string, keep: string): void {
+  try {
+    for (const name of fs.readdirSync(stateDir)) {
+      const dir = path.join(stateDir, name);
+      if (dir === keep) continue;
+      if (Date.now() - fs.statSync(dir).mtimeMs > STALE_HOME_MS) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch {
+    // pruning is best-effort
+  }
+}
+
+function readMcpConfig(file: string): CachedMcpConfig | undefined {
+  try {
+    const stat = fs.statSync(file);
+    const signature = `${stat.size}:${stat.mtimeMs}`;
+    const cached = configCache.get(file);
+    if (cached?.signature === signature) return cached;
+    const raw = fs.readFileSync(file, 'utf8');
+    const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
+    const next = { signature, raw, config };
+    configCache.set(file, next);
+    return next;
+  } catch {
+    return undefined;
+  }
+}
+
+function homeSourceSignature(baseHome: string): string {
+  const gemini = path.join(baseHome, '.gemini');
+  const config = path.join(gemini, 'config');
+  try {
+    return `${fs.statSync(gemini).mtimeMs}:${fs.statSync(config).mtimeMs}`;
+  } catch {
+    return 'missing';
+  }
 }
 
 /**
- * Creates an ephemeral scoped home environment disabling heavy, unused MCP servers
- * for pure coding tasks, eliminating redundant system prompt schemas.
- * Uses caching to avoid filesystem ops when domain requirements match prior turns.
+ * Returns a HOME for one agy turn in which unneeded MCP servers are disabled.
+ *
+ * The home is persistent and shared: it is keyed by the MCP config content plus the set of disabled
+ * servers, built once, and reused by every later turn (and by concurrent turns). Nothing is created
+ * or deleted per turn, so /tmp is never touched and there is no cleanup race between parallel turns.
  */
-export function createScopedMcpEnvironment(
-  options: CreateScopedMcpOptions,
-): ScopedMcpResult {
-  const baseHome = options.baseHome || process.env.HOME || '/home/prime';
-  const noopResult: ScopedMcpResult = {
-    homeDir: baseHome,
-    disabledServers: [],
-    activeDomains: [],
-    cleanup: () => {},
-  };
+export function createScopedMcpEnvironment(options: CreateScopedMcpOptions): ScopedMcpResult {
+  const baseHome = options.baseHome || process.env.HOME || os.homedir();
+  const noopResult: ScopedMcpResult = { homeDir: baseHome, disabledServers: [], activeDomains: [], cleanup: () => {} };
+  const mode: McpMode = options.mode ?? 'auto';
 
-  if (options.enabled === false) {
-    return noopResult;
-  }
+  if (options.enabled === false || mode === 'all') return noopResult;
 
-  const requiredDomains = detectRequiredDomains(options.prompt);
-  const domainCacheKey = Array.from(requiredDomains).sort().join(',');
+  const realMcpConfigFile = options.configPath || path.join(baseHome, '.gemini', 'config', 'mcp_config.json');
+  const cachedConfig = readMcpConfig(realMcpConfigFile);
+  if (!cachedConfig) return noopResult;
+  const { raw: rawConfig, config: mcpConfig } = cachedConfig;
 
-  // Check cache before filesystem ops
-  const cached = scopedMcpCache.get(domainCacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.result;
-  }
+  const serverNames = Object.keys(mcpConfig.mcpServers ?? {});
+  if (serverNames.length === 0) return noopResult;
 
-  const realMcpConfigFile =
-    options.configPath || path.join(baseHome, '.gemini', 'config', 'mcp_config.json');
+  const requiredDomains = mode === 'none' ? new Set<McpDomain>() : detectRequiredDomains(options.prompt);
+  const disabledServers = mode === 'none' ? serverNames : computeDisabledServers(serverNames, requiredDomains);
+  const activeDomains = Array.from(requiredDomains);
+  if (disabledServers.length === 0) return { ...noopResult, activeDomains };
 
-  if (!fs.existsSync(realMcpConfigFile)) {
-    return noopResult;
-  }
+  const key = createHash('sha1').update(rawConfig).update('\0').update([...disabledServers].sort().join(',')).digest('hex').slice(0, 16);
+  const stateDir = options.stateDir || path.join(baseHome, '.gemini-acp-server', 'scoped-homes');
+  const home = path.join(stateDir, key);
 
-  let mcpConfig: any;
   try {
-    mcpConfig = JSON.parse(fs.readFileSync(realMcpConfigFile, 'utf8'));
-  } catch {
-    return noopResult;
-  }
-
-  const servers = mcpConfig.mcpServers || {};
-  const serverNames = Object.keys(servers);
-  if (serverNames.length === 0) {
-    return noopResult;
-  }
-
-  const disabledServers = computeDisabledServers(serverNames, requiredDomains);
-
-  if (disabledServers.length === 0) {
-    const result: ScopedMcpResult = {
-      homeDir: baseHome,
-      disabledServers: [],
-      activeDomains: Array.from(requiredDomains),
-      cleanup: () => {},
-    };
-    scopedMcpCache.set(domainCacheKey, { result, timestamp: Date.now() });
-    return result;
-  }
-
-  // Create isolated temp directory
-  try {
-    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-acp-mcp-'));
-    const scopedGemini = path.join(tmpHome, '.gemini');
-    fs.mkdirSync(scopedGemini, { recursive: true });
-
-    const realGemini = path.join(baseHome, '.gemini');
-    if (fs.existsSync(realGemini)) {
-      for (const item of fs.readdirSync(realGemini)) {
-        if (item === 'config') {
-          const scopedConfig = path.join(scopedGemini, 'config');
-          fs.mkdirSync(scopedConfig, { recursive: true });
-          const realConfig = path.join(realGemini, 'config');
-
-          for (const cItem of fs.readdirSync(realConfig)) {
-            if (cItem === 'mcp_config.json') {
-              const modifiedConfig = JSON.parse(JSON.stringify(mcpConfig));
-              for (const sName of disabledServers) {
-                if (modifiedConfig.mcpServers[sName]) {
-                  modifiedConfig.mcpServers[sName].disabled = true;
-                }
-              }
-              fs.writeFileSync(
-                path.join(scopedConfig, cItem),
-                JSON.stringify(modifiedConfig, null, 2),
-              );
-            } else {
-              fs.symlinkSync(path.join(realConfig, cItem), path.join(scopedConfig, cItem));
-            }
-          }
-        } else {
-          fs.symlinkSync(path.join(realGemini, item), path.join(scopedGemini, item));
-        }
-      }
+    // agy still launches servers marked `disabled: true` (measured: ~35 s of startup for 14 servers, versus
+    // ~5 s with none configured), so excluded servers must be removed from the config, not flagged.
+    const modified = JSON.parse(rawConfig) as { mcpServers: Record<string, Record<string, unknown>> };
+    for (const name of disabledServers) {
+      delete modified.mcpServers[name];
     }
-
-    const result: ScopedMcpResult = {
-      homeDir: tmpHome,
-      disabledServers,
-      activeDomains: Array.from(requiredDomains),
-      cleanup: () => {
-        try {
-          fs.rmSync(tmpHome, { recursive: true, force: true });
-        } catch {
-          // ignore cleanup errors
-        }
-      },
-    };
-    scopedMcpCache.set(domainCacheKey, { result, timestamp: Date.now() });
-    return result;
-  } catch (err) {
-    // If sandboxing encounters an issue, fallback to normal home
-    return noopResult;
+    const cacheKey = `${stateDir}\0${home}`;
+    const sourceSignature = homeSourceSignature(baseHome);
+    if (!fs.existsSync(home)) {
+      fs.mkdirSync(stateDir, { recursive: true });
+      const staging = fs.mkdtempSync(path.join(stateDir, '.build-'));
+      populateScopedHome(staging, baseHome, modified);
+      try {
+        fs.renameSync(staging, home);
+      } catch {
+        fs.rmSync(staging, { recursive: true, force: true }); // another process built it first
+      }
+      pruneStaleHomes(stateDir, home);
+      scopedHomeSourceCache.set(cacheKey, sourceSignature);
+    } else if (scopedHomeSourceCache.get(cacheKey) !== sourceSignature) {
+      // real .gemini gains entries over time (conversations, caches); keep the links current
+      populateScopedHome(home, baseHome, modified);
+      scopedHomeSourceCache.set(cacheKey, sourceSignature);
+    }
+    return { homeDir: home, disabledServers, activeDomains, cleanup: () => {} };
+  } catch {
+    return noopResult; // if scoping fails for any reason, run with the normal home
   }
 }
